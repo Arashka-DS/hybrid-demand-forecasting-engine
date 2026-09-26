@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'liquidity_fastapi'
+    static_configs:
+      - targets: ['forecasting_api:8000']
