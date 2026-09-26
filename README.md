@@ -7,7 +7,7 @@ An enterprise-grade time-series forecasting platform combining additive structur
 ### 1. FinTech Settlement & Liquidity Allocation (`src/run_fintech_liquidity.py`)
 * **Core Problem:** Payment clearinghouses and digital wallets face liquidity volatility during automated clearing cycles. Under-provisioning incurs severe central bank overnight penalty interest (34%), while over-provisioning locks up working capital.
 * **Domain Realities Modeled:** Four daily Paya batch settlement windows (03:45, 10:45, 13:45, 17:45), the "Saturday Liquidity Squeeze" (accumulated weekend settlement flushes), and month-end payroll shocks.
-* **Risk Quant:** Calculates 99% Value at Risk ($VaR_{99\%}$) and Expected Shortfall ($CVaR$) to establish optimal regulatory capital buffers.
+* **Risk Quant:** Calculates 99% Value at Risk ($VaR_{99\\%}$) and Expected Shortfall ($CVaR$) to establish optimal regulatory capital buffers.
 
 ### 2. Q-Commerce Darkstore Depletion (`src/run_qcommerce_demand.py`)
 * **Core Problem:** Hyperlocal 15-minute delivery services face stockout censoring. When on-hand inventory drops to zero, recorded sales cease, biasing naive algorithms into under-forecasting replenishment needs.
