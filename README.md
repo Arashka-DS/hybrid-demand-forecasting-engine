@@ -1,16 +1,18 @@
-# FinTech Liquidity & Transaction Demand Forecaster
+# FinTech Liquidity & Demand Forecasting Pipeline
 
-A production MLOps pipeline designed to predict fiat liquidity requirements and monitor payment gateway health. This system predicts multi-horizon transaction volumes ($t+1, t+7, t+30$) and alerts operations if real-time volume drops below expected bounds.
+An enterprise-grade MLOps time-series architecture designed to forecast daily fiat liquidity requirements and monitor real-time payment gateway health for BNPL and E-commerce platforms.
 
-## Architectural Highlights
-- **Hybrid Modeling:** Uses **Prophet** to capture broad macro-seasonality and trends, while passing the residual errors to **LightGBM** to model non-linear exogenous shocks (Paydays, Holidays, rolling lags).
-- **Time-Series Integrity:** Strictly evaluated using `TimeSeriesSplit` (Walk-Forward Validation) to prevent future data leakage.
-- **CTO-Level Metrics:** Optimized using $WAPE$ (Weighted Absolute Percentage Error) and a custom business cost function:
-  $$Total\_Cost = (\text{Over\_Prediction} \times C_{idle}) + (\text{Under\_Prediction} \times C_{failed})$$
-- **Orchestration & DevOps:** Models are retrained nightly via **Apache Airflow**. Inferences are served via a **FastAPI** endpoint that checks live gateway traffic against the forecast to detect $-3\sigma$ outages, automatically alerting a **Grafana** SRE dashboard via **PostgreSQL**.
+## 🏗️ Dual-Layer Architecture
+1. **The Executive Layer (Metabase & Batch ML):** A hybrid `Prophet` + `LightGBM` model forecasts $t+1$ to $t+30$ liquidity demand. It minimizes a custom financial cost function (Idle Cash vs. Failed Transactions) and calculates the 95% Value at Risk (VaR). Metrics are visualized via Metabase.
+2. **The SRE Layer (Grafana & Real-Time API):** A `FastAPI` endpoint ingests live transactional telemetry. If actual volume drops $-3\sigma$ below the forecasted threshold, the system flags an API gateway outage, immediately visible on the Grafana monitoring dashboard.
 
-## Quick Start
-1. `docker-compose up -d --build`
-2. Run `python src/forecaster.py` to train the initial hybrid models and generate the baseline threshold.
-3. Access **Grafana** at `http://localhost:3000` (auto-provisioned to the Postgres Time-Series DB) to monitor the live API health.
-4. Send live telemetry to the FastAPI instance at `http://localhost:8000/monitor/gateway` to simulate real-time traffic anomalies.
+## ⚙️ Senior MLOps Features
+- **Data Drift Detection:** Integrates `Evidently AI` to monitor statistical shifts in transaction distributions, dynamically altering retraining schedules in Airflow.
+- **Walk-Forward Validation:** Evaluated using strict expanding-window cross-validation (`TimeSeriesSplit`) to prevent temporal data leakage.
+- **Exogenous Feature Engineering:** Automatically generates rolling lags and boolean flags for macro events (Paydays, Holidays).
+
+## 🚀 Quick Start
+1. `docker-compose up -d --build` (Spins up Postgres, Grafana, Metabase, and FastAPI).
+2. Run `python src/forecaster.py` to execute the hybrid walk-forward training and generate the HTML Drift Report.
+3. Access **Grafana** at `http://localhost:3000` for live API monitoring.
+4. Access **Metabase** at `http://localhost:3001` for the Executive level financial dashboard.
