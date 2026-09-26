@@ -1,59 +1,84 @@
 version: '3.8'
 
 services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus_monitor
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    depends_on:
-      - forecasting_api
-
-  postgres_ts:
+  postgres_dw:
     image: postgres:15-alpine
-    container_name: time_series_db
+    container_name: liquidity_postgres
     environment:
-      POSTGRES_USER: ts_admin
-      POSTGRES_PASSWORD: ts_password
-      POSTGRES_DB: liquidity_warehouse
+      POSTGRES_USER: dw_admin
+      POSTGRES_PASSWORD: dw_password
+      POSTGRES_DB: liquidity_dw
     ports:
       - "5432:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_dw_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dw_admin -d liquidity_dw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana_monitor
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-    depends_on:
-      - postgres_ts
-
-  metabase:
-    image: metabase/metabase:latest
-    container_name: metabase_liquidity
-    ports:
-      - "3001:3000" # Mapped to 3001 to avoid clashing with Grafana on 3000
-    environment:
-      - MB_DB_TYPE=postgres
-      - MB_DB_DBNAME=liquidity_warehouse
-      - MB_DB_PORT=5432
-      - MB_DB_USER=ts_admin
-      - MB_DB_PASS=ts_password
-      - MB_DB_HOST=postgres_ts
-    depends_on:
-      - postgres_ts
-
-  forecasting_api:
+  forecaster_api:
     build: .
-    container_name: forecasting_api
+    container_name: forecaster_api
     ports:
       - "8000:8000"
     environment:
-      - DB_HOST=postgres_ts
+      - DB_HOST=postgres_dw
+      - DB_USER=dw_admin
+      - DB_PASSWORD=dw_password
+      - DB_NAME=liquidity_dw
+    volumes:
+      - ./src:/app/src
+      - ./models:/app/models
+    command: >
+      bash -c "python src/run_fintech_liquidity.py && 
+               python src/run_qcommerce_demand.py && 
+               uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
-      - postgres_ts
+      postgres_dw:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: forecaster_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    depends_on:
+      - forecaster_api
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: forecaster_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: forecaster_metabase
+    ports:
+      - "3000:3000"
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=liquidity_dw
+      - MB_DB_PORT=5432
+      - MB_DB_USER=dw_admin
+      - MB_DB_PASS=dw_password
+      - MB_DB_HOST=postgres_dw
+    depends_on:
+      postgres_dw:
+        condition: service_healthy
+
+volumes:
+  pg_dw_data:
