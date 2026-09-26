@@ -2,70 +2,67 @@ import pandas as pd
 import numpy as np
 from prophet import Prophet
 import lightgbm as lgb
-from sklearn.model_selection import TimeSeriesSplit
-from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset
-import joblib
-import os
 
-class HybridLiquidityForecaster:
+class HybridProphetLGBM:
     def __init__(self):
-        self.prophet_model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
-        self.lgbm_model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, max_depth=5)
-        self.cost_idle_cash = 0.02
-        self.cost_failed_tx = 5.0
+        # Prophet handles the structural macro-seasonality and trends
+        self.prophet = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=False)
+        # LightGBM learns the non-linear residuals and micro-shocks
+        self.lgbm = lgb.LGBMRegressor(n_estimators=150, learning_rate=0.05, max_depth=6)
 
-    # ... (Keep existing engineer_features method) ...
+    def extract_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Extracts temporal features and autoregressive Prophet lags."""
+        df = df.copy()
+        df['hour'] = df['ds'].dt.hour
+        df['dayofweek'] = df['ds'].dt.dayofweek
+        df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
+        
+        # Use Prophet's yhat for lags to prevent data leakage during multi-step inference
+        df['yhat_lag_1'] = df['yhat'].shift(1)
+        df['yhat_lag_24'] = df['yhat'].shift(24)
+        return df.dropna()
 
-    def calculate_business_metrics(self, y_true, y_pred):
-        """WAPE, Financial Cost, and 95% Value at Risk (VaR)."""
-        wape = np.sum(np.abs(y_true - y_pred)) / np.sum(y_true)
+    def fit(self, df: pd.DataFrame):
+        """Trains the hybrid architecture on historical time-series data."""
+        # 1. Fit Prophet Baseline
+        self.prophet.fit(df)
+        prophet_pred = self.prophet.predict(df[['ds']])
         
-        errors = y_pred - y_true
-        total_cost = (np.sum(errors[errors > 0]) * self.cost_idle_cash) + \
-                     (np.sum(np.abs(errors[errors < 0])) * self.cost_failed_tx)
+        # 2. Calculate Residuals (Actual - Prophet Prediction)
+        df_merged = df.copy()
+        df_merged['yhat'] = prophet_pred['yhat'].values
+        df_merged['residual'] = df_merged['y'] - df_merged['yhat']
         
-        # Calculate 95% Historical VaR on the residuals
-        # "With 95% confidence, our volume won't drop below the forecast by more than X"
-        var_95 = np.percentile(errors, 5) 
+        # 3. Extract Features for LightGBM
+        df_features = self.extract_features(df_merged)
+        self.feature_cols = ['yhat', 'hour', 'dayofweek', 'is_weekend', 'yhat_lag_1', 'yhat_lag_24']
         
-        return wape, total_cost, var_95
+        X = df_features[self.feature_cols]
+        y_residual = df_features['residual']
+        
+        # 4. Train LightGBM on the residuals
+        self.lgbm.fit(X, y_residual)
+        print("Hybrid Engine Trained: Prophet (Macro) + LightGBM (Micro-Residuals).")
 
-    def check_data_drift(self, reference_data, current_data):
-        """Uses Evidently AI to detect statistical distribution shifts in transactions."""
-        print("Running Data Drift Analysis...")
-        drift_report = Report(metrics=[DataDriftPreset()])
-        # We check if the distribution of 'y' (volume) has drifted significantly
-        drift_report.run(reference_data=reference_data[['y']], current_data=current_data[['y']])
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Generates the final hybrid forecast."""
+        prophet_pred = self.prophet.predict(df[['ds']])
         
-        # Save HTML report for MLOps tracking
-        os.makedirs("reports", exist_ok=True)
-        drift_report.save_html("reports/volume_drift_report.html")
+        df_merged = df.copy()
+        df_merged['yhat'] = prophet_pred['yhat'].values
         
-        drift_dict = drift_report.as_dict()
-        dataset_drift = drift_dict["metrics"][0]["result"]["dataset_drift"]
-        return dataset_drift # Returns True if drift is detected
+        # Handle NA values for early lags by backfilling in inference
+        df_features = self.extract_features(df_merged)
+        if df_features.empty:
+            return df_merged # Fallback to pure Prophet if insufficient lag history
+            
+        X = df_features[self.feature_cols]
+        residual_pred = self.lgbm.predict(X)
+        
+        # Final Forecast = Prophet Baseline + LightGBM Residual Correction
+        df_features['hybrid_forecast'] = df_features['yhat'] + residual_pred
+        return df_features
 
-    def train_hybrid_model(self, data):
-        data = self.engineer_features(data)
-        
-        # Split data for drift monitoring simulation (first 80% reference, last 20% current)
-        split_idx = int(len(data) * 0.8)
-        ref_data, curr_data = data.iloc[:split_idx], data.iloc[split_idx:]
-        
-        is_drifting = self.check_data_drift(ref_data, curr_data)
-        if is_drifting:
-            print("⚠️ WARNING: Data Drift Detected. Model retraining prioritized.")
-        
-        # ... (Keep existing Prophet + LightGBM Walk-Forward Training code) ...
-        
-        data['lgbm_residual_pred'] = self.lgbm_model.predict(data[features])
-        data['final_forecast'] = data['prophet_base'] + data['lgbm_residual_pred']
-        
-        wape, cost, var_95 = self.calculate_business_metrics(data['y'], data['final_forecast'])
-        print(f"Training Complete. WAPE: {wape:.4f} | Financial Cost: ${cost:,.2f}")
-        print(f"Risk Metric - 95% VaR: Maximum expected shortfall is {abs(var_95):,.2f} transactions.")
-        
-        os.makedirs("models", exist_ok=True)
-        joblib.dump(self.prophet_model, "models/prophet_base.pkl")
-        joblib.dump(self.lgbm_model, "models/lgbm_residual.pkl")
+    def evaluate_wape(self, actual: np.array, forecast: np.array) -> float:
+        """Weighted Absolute Percentage Error (WAPE) - highly resistant to zero-demand periods."""
+        return np.sum(np.abs(actual - forecast)) / np.sum(actual)
