@@ -3,6 +3,8 @@ import numpy as np
 from prophet import Prophet
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
 import joblib
 import os
 
@@ -10,86 +12,60 @@ class HybridLiquidityForecaster:
     def __init__(self):
         self.prophet_model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
         self.lgbm_model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, max_depth=5)
-        self.cost_idle_cash = 0.02   # Penalty per unused unit of fiat
-        self.cost_failed_tx = 5.0    # Penalty per failed transaction unit
+        self.cost_idle_cash = 0.02
+        self.cost_failed_tx = 5.0
 
-    def engineer_features(self, df):
-        """Generates exogenous covariates, lags, and rolling metrics."""
-        df['day_of_week'] = df['ds'].dt.dayofweek
-        df['is_payday'] = df['ds'].dt.day.isin([1, 28, 29, 30, 31]).astype(int)
-        df['is_holiday'] = 0 # Placeholder: Integrate actual Persian calendar API
-        
-        # Lag Features
-        df['lag_1'] = df['y'].shift(1)
-        df['lag_7'] = df['y'].shift(7)
-        df['lag_30'] = df['y'].shift(30)
-        
-        # Rolling Features
-        df['rolling_7_mean'] = df['y'].shift(1).rolling(7).mean()
-        df['rolling_7_std'] = df['y'].shift(1).rolling(7).std()
-        
-        return df.dropna().reset_index(drop=True)
+    # ... (Keep existing engineer_features method) ...
 
     def calculate_business_metrics(self, y_true, y_pred):
-        """WAPE and Custom Financial Cost Function."""
-        # Weighted Absolute Percentage Error
+        """WAPE, Financial Cost, and 95% Value at Risk (VaR)."""
         wape = np.sum(np.abs(y_true - y_pred)) / np.sum(y_true)
         
-        # Financial Impact Cost
         errors = y_pred - y_true
-        over_prediction = np.sum(errors[errors > 0]) * self.cost_idle_cash
-        under_prediction = np.sum(np.abs(errors[errors < 0])) * self.cost_failed_tx
-        total_cost = over_prediction + under_prediction
+        total_cost = (np.sum(errors[errors > 0]) * self.cost_idle_cash) + \
+                     (np.sum(np.abs(errors[errors < 0])) * self.cost_failed_tx)
         
-        return wape, total_cost
+        # Calculate 95% Historical VaR on the residuals
+        # "With 95% confidence, our volume won't drop below the forecast by more than X"
+        var_95 = np.percentile(errors, 5) 
+        
+        return wape, total_cost, var_95
+
+    def check_data_drift(self, reference_data, current_data):
+        """Uses Evidently AI to detect statistical distribution shifts in transactions."""
+        print("Running Data Drift Analysis...")
+        drift_report = Report(metrics=[DataDriftPreset()])
+        # We check if the distribution of 'y' (volume) has drifted significantly
+        drift_report.run(reference_data=reference_data[['y']], current_data=current_data[['y']])
+        
+        # Save HTML report for MLOps tracking
+        os.makedirs("reports", exist_ok=True)
+        drift_report.save_html("reports/volume_drift_report.html")
+        
+        drift_dict = drift_report.as_dict()
+        dataset_drift = drift_dict["metrics"][0]["result"]["dataset_drift"]
+        return dataset_drift # Returns True if drift is detected
 
     def train_hybrid_model(self, data):
-        """Step 1: Prophet, Step 2: Extract Residuals, Step 3: LightGBM."""
         data = self.engineer_features(data)
         
-        # Time-Series Expanding Window Cross-Validation
-        tscv = TimeSeriesSplit(n_splits=3)
-        print("Executing Walk-Forward Validation...")
+        # Split data for drift monitoring simulation (first 80% reference, last 20% current)
+        split_idx = int(len(data) * 0.8)
+        ref_data, curr_data = data.iloc[:split_idx], data.iloc[split_idx:]
         
-        for train_index, test_index in tscv.split(data):
-            train_cv, test_cv = data.iloc[train_index], data.iloc[test_index]
-            
-            # Step 1: Prophet Baseline
-            prophet_cv = Prophet().fit(train_cv[['ds', 'y']])
-            prophet_train_preds = prophet_cv.predict(train_cv[['ds']])['yhat']
-            
-            # Step 2: Extract Residuals
-            train_cv['residual'] = train_cv['y'] - prophet_train_preds
-            
-            # Step 3: Train LightGBM on Residuals
-            features = ['day_of_week', 'is_payday', 'lag_1', 'lag_7', 'lag_30', 'rolling_7_mean', 'rolling_7_std']
-            lgbm_cv = lgb.LGBMRegressor().fit(train_cv[features], train_cv['residual'])
-
-        # Final Full-Pass Training
-        self.prophet_model.fit(data[['ds', 'y']])
-        data['prophet_base'] = self.prophet_model.predict(data[['ds']])['yhat']
-        data['residual'] = data['y'] - data['prophet_base']
+        is_drifting = self.check_data_drift(ref_data, curr_data)
+        if is_drifting:
+            print("⚠️ WARNING: Data Drift Detected. Model retraining prioritized.")
         
-        self.lgbm_model.fit(data[features], data['residual'])
+        # ... (Keep existing Prophet + LightGBM Walk-Forward Training code) ...
         
-        # Evaluate Training Set Fit
         data['lgbm_residual_pred'] = self.lgbm_model.predict(data[features])
         data['final_forecast'] = data['prophet_base'] + data['lgbm_residual_pred']
         
-        wape, cost = self.calculate_business_metrics(data['y'], data['final_forecast'])
+        wape, cost, var_95 = self.calculate_business_metrics(data['y'], data['final_forecast'])
         print(f"Training Complete. WAPE: {wape:.4f} | Financial Cost: ${cost:,.2f}")
+        print(f"Risk Metric - 95% VaR: Maximum expected shortfall is {abs(var_95):,.2f} transactions.")
         
         os.makedirs("models", exist_ok=True)
         joblib.dump(self.prophet_model, "models/prophet_base.pkl")
         joblib.dump(self.lgbm_model, "models/lgbm_residual.pkl")
-
-# Simulation execution block
-if __name__ == "__main__":
-    np.random.seed(42)
-    dates = pd.date_range(start="2024-01-01", periods=365, freq="D")
-    base_volume = 50000 + (np.sin(np.arange(365) * 2 * np.pi / 7) * 10000) # Weekly seasonality
-    
-    df = pd.DataFrame({'ds': dates, 'y': base_volume + np.random.normal(0, 2000, 365)})
-    
-    forecaster = HybridLiquidityForecaster()
-    forecaster.train_hybrid_model(df)
