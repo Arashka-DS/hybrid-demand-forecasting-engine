@@ -1,11 +1,15 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
+from prometheus_fastapi_instrumentator import Instrumentator # NEW IMPORT
 import pandas as pd
 import numpy as np
 import psycopg2
 import os
 
 app = FastAPI(title="Liquidity & Gateway Monitor API")
+
+# NEW: Instrument the API to expose real-time metrics to Prometheus
+Instrumentator().instrument(app).expose(app)
 
 class LiveTransactionData(BaseModel):
     timestamp: str
@@ -32,17 +36,14 @@ def log_to_postgres(payload, is_anomaly, residual):
 @app.post("/monitor/gateway")
 def check_gateway_health(data: LiveTransactionData, bg_tasks: BackgroundTasks):
     residual = data.actual_volume - data.forecasted_volume
+    historical_std = 2000.0 # In production, pull this dynamically from Redis/Postgres
     
-    # Standard deviation of historical volume proxy (usually pre-calculated and loaded)
-    historical_std = 2000.0 
-    
-    # Anomaly Definition: Actual volume drops 3 Standard Deviations below the forecast
     is_outage_anomaly = False
     status = "System Healthy"
     
     if residual <= (-3 * historical_std):
         is_outage_anomaly = True
-        status = "CRITICAL: Gateway Outage Detected (Volume collapsed below forecast lower bound)"
+        status = "CRITICAL: Gateway Outage Detected"
 
     bg_tasks.add_task(log_to_postgres, data, is_outage_anomaly, residual)
 
