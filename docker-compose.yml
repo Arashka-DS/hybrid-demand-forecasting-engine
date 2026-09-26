@@ -23,6 +23,21 @@ services:
     depends_on:
       - postgres_ts
 
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase_liquidity
+    ports:
+      - "3001:3000" # Mapped to 3001 to avoid clashing with Grafana on 3000
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=liquidity_warehouse
+      - MB_DB_PORT=5432
+      - MB_DB_USER=ts_admin
+      - MB_DB_PASS=ts_password
+      - MB_DB_HOST=postgres_ts
+    depends_on:
+      - postgres_ts
+
   forecasting_api:
     build: .
     container_name: forecasting_api
