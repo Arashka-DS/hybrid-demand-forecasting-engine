@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  postgres_ts:
+    image: postgres:15-alpine
+    container_name: time_series_db
+    environment:
+      POSTGRES_USER: ts_admin
+      POSTGRES_PASSWORD: ts_password
+      POSTGRES_DB: liquidity_warehouse
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana_monitor
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - postgres_ts
+
+  forecasting_api:
+    build: .
+    container_name: forecasting_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=postgres_ts
+    depends_on:
+      - postgres_ts
