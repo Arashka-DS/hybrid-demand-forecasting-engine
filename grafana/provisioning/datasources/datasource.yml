@@ -2,10 +2,10 @@ apiVersion: 1
 datasources:
   - name: PostgreSQL_Liquidity
     type: postgres
-    url: postgres_ts:5432
-    user: ts_admin
+    url: postgres_dw:5432
+    user: dw_admin
     secureJsonData:
-      password: ts_password
+      password: dw_password
     jsonData:
-      database: liquidity_warehouse
+      database: liquidity_dw
       sslmode: disable
