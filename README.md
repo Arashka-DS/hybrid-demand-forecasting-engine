@@ -34,7 +34,7 @@ An enterprise-grade time-series forecasting platform combining additive structur
    ```bash
    docker-compose up -d --build
    ```
-   *(Note: The API container automatically trains both domain models on boot and seeds the PostgreSQL data warehouse)*
+   *(Note: The API container automatically trains both domain models on boot and seeds the PostgreSQL data warehouse).*
 
 2. **Access Platform Dashboards:**
    * **FastAPI Interactive Docs:** `http://localhost:8000/docs`
