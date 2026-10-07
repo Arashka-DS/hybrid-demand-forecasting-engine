@@ -27,6 +27,7 @@ services:
       - DB_USER=dw_admin
       - DB_PASSWORD=dw_password
       - DB_NAME=liquidity_dw
+      - PYTHONPATH=/app
     volumes:
       - ./src:/app/src
       - ./models:/app/models
