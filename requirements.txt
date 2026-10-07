@@ -5,6 +5,7 @@ prophet==1.1.5
 lightgbm==4.3.0
 pandas==2.2.2
 numpy==1.26.4
+plotly==6.6.0
 scikit-learn==1.5.1
 psycopg2-binary==2.9.9
 joblib==1.4.2
