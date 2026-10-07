@@ -87,7 +87,6 @@ services:
     depends_on:
       metabase_db:
         condition: service_started
-    depends_on:
       postgres_dw:
         condition: service_healthy
 
